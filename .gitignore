@@ -1,0 +1,25 @@
+# Environment / secrets
+.env
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Generated audio (test outputs, not source)
+*.wav
+!eval/test_cases/audio_clips/*.wav
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Node (for later phases)
+node_modules/
+.next/
