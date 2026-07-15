@@ -23,6 +23,8 @@ class LLMClient:
     def get_response(self, user_text: str) -> str:
         """
         Send user text to the LLM and return its reply as a plain string.
+        Kept for Phase 1 compatibility / quick tests. Prefer stream_response
+        for anything real-time, since this waits for the full generation.
         """
         completion = self.client.chat.completions.create(
             model=config.GROQ_LLM_MODEL,
@@ -34,3 +36,27 @@ class LLMClient:
             max_tokens=300,
         )
         return completion.choices[0].message.content.strip()
+
+    def stream_response(self, user_text: str):
+        """
+        Yield the LLM's reply token-by-token as it's generated, instead of
+        waiting for the full response. This is what makes low end-to-end
+        latency possible — we can start sending text to TTS before the LLM
+        has finished "thinking."
+
+        Yields: str chunks (usually a few characters / one token at a time).
+        """
+        stream = self.client.chat.completions.create(
+            model=config.GROQ_LLM_MODEL,
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.7,
+            max_tokens=300,
+            stream=True,
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta

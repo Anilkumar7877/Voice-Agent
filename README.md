@@ -68,8 +68,48 @@ piece works, makes debugging much harder — if something breaks you won't know
 if it's the streaming logic or the underlying API call. Get the boring
 non-streaming version working first.
 
+## Phase 2 — Streaming (added)
+
+Adds:
+- `orchestrator/audio/silence_detector.py` — auto-stops recording when you
+  pause, instead of a fixed 5-second window. **Not real VAD** — it's naive
+  amplitude thresholding. Phase 4 replaces this with Silero VAD for real
+  barge-in support.
+- `orchestrator/agent/llm_client.py` — added `stream_response()`, which
+  yields the LLM's reply token-by-token instead of waiting for the full
+  generation.
+- `orchestrator/audio/text_chunker.py` — buffers those tokens into
+  sentence-sized chunks (so TTS isn't called word-by-word, which sounds
+  choppy and wastes API calls).
+- `orchestrator/audio/tts_client.py` — added `stream_and_play()`, using
+  Cartesia's websocket streaming API, which plays audio as it's generated
+  instead of waiting for the full clip.
+
+**Important honesty note:** Groq's Whisper endpoint is batch/REST, not a
+streaming websocket — so STT here is still "record a full utterance, then
+transcribe it," not true live partial transcription. The latency win in
+Phase 2 comes entirely from pipelining LLM generation with TTS playback, not
+from streaming STT. If your eval harness later shows STT is your bottleneck,
+switching to Deepgram (which does support real streaming STT) is the fix —
+that's a config.py change plus a new stt_client, not a rewrite.
+
+Run the Phase 2 test:
+```bash
+python scripts/test_streaming_loop.py
+```
+This prints basic latency numbers (time to transcript, time to first LLM
+token) — these are the same categories your eval harness will formalize in
+Phase 5, so pay attention to what "feels slow" here.
+
+**A note on the Cartesia websocket code**: streaming TTS SDKs change their
+method signatures between versions more often than REST APIs do. If
+`stream_and_play()` throws an `AttributeError` or unexpected `TypeError`,
+check `pip show cartesia` and cross-reference the version against
+https://docs.cartesia.ai — paste me the exact error and installed version
+and I'll fix the call to match.
+
 ## Next phase
-Once `test_full_loop.py` works reliably, we move to Phase 2: streaming STT
-(partial transcripts as you talk), streaming LLM tokens, and streaming TTS
-playback — so the agent starts responding before you've even finished the
-full turn.
+Phase 3: tool-calling. The agent will decide per-turn whether to answer
+directly, query your existing RAG/ChromaDB store, or run a web search —
+using LangGraph, reusing the same routing pattern from your Research
+Assistant project.
