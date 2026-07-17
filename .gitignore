@@ -23,3 +23,6 @@ Thumbs.db
 # Node (for later phases)
 node_modules/
 .next/
+
+# Local databases and dummy data
+data/

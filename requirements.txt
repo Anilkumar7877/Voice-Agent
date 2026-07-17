@@ -1,7 +1,13 @@
 groq>=0.11.0
-cartesia>=2.0.0
+cartesia[websockets]>=2.0.0
 python-dotenv==1.0.1
 sounddevice==0.4.7
 numpy==1.26.4
 scipy==1.13.1
+
+# Phase 3 - agent orchestration + tools
+langgraph==0.2.62
+chromadb==0.5.23
+sentence-transformers==3.3.1
+tavily-python==0.5.0
 

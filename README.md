@@ -113,3 +113,53 @@ Phase 3: tool-calling. The agent will decide per-turn whether to answer
 directly, query your existing RAG/ChromaDB store, or run a web search —
 using LangGraph, reusing the same routing pattern from your Research
 Assistant project.
+
+## Phase 3 — Agent tool-calling (added)
+
+Adds:
+- `orchestrator/agent/tools/rag_tool.py` — RAG tool backed by a **dummy**
+  ChromaDB knowledge base (5 placeholder HR/engineering docs). Uses the
+  same embedding model (`all-MiniLM-L6-v2`) as a real production RAG
+  setup, so swapping in your actual Document Q&A project's store later is
+  just changing `CHROMA_PERSIST_DIR` / `CHROMA_COLLECTION_NAME` in
+  `config.py` — not a rewrite.
+- `orchestrator/agent/tools/web_search_tool.py` — Tavily web search wrapper.
+- `orchestrator/agent/graph.py` — the actual agent: a LangGraph state
+  machine with a `route` node (LLM decides: rag / web_search / direct),
+  the corresponding tool node, and a `synthesize` node that turns the
+  result into a short, voice-friendly answer.
+- `scripts/seed_dummy_kb.py` — run once to build the dummy Chroma
+  collection.
+- `scripts/test_agent_graph.py` — **text-only** test of the agent's
+  routing + tool-calling, no mic/STT/TTS involved. This is the fast
+  iteration loop — get routing right here before wiring into voice.
+
+### Setup for this phase
+```bash
+pip install -r requirements.txt   # picks up langgraph, chromadb, sentence-transformers, tavily-python
+```
+Add `TAVILY_API_KEY` to your `.env` (free tier, 1,000 searches/month, no
+card — get one at https://app.tavily.com).
+
+Then:
+```bash
+python scripts/seed_dummy_kb.py      # builds the dummy knowledge base
+python scripts/test_agent_graph.py   # runs 4 test questions through the agent
+```
+You should see each question correctly routed to `rag`, `web_search`, or
+`direct`, with sources shown for the tool-based ones. If routing looks
+wrong for a question, the fix is almost always in `ROUTER_PROMPT` inside
+`graph.py` — tighten the tool descriptions, not the routing logic itself.
+
+### What's NOT done yet in this phase
+The agent graph is not yet wired into the voice pipeline
+(`test_streaming_loop.py`) — that's the next step, connecting
+`VoiceAgent.run()` in place of the plain `LLMClient` calls, then re-adding
+streaming on top (since `graph.invoke()` is currently blocking/non-streaming
+per turn). We'll do that once you've confirmed the routing itself is solid
+via `test_agent_graph.py`.
+
+## Next phase
+Phase 4: barge-in / interruption handling with real Silero VAD — the
+hardest phase. After that, Phase 5 is the eval harness, which will finally
+let you measure and report concrete before/after numbers for your resume.
