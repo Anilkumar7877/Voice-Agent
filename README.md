@@ -152,12 +152,29 @@ wrong for a question, the fix is almost always in `ROUTER_PROMPT` inside
 `graph.py` — tighten the tool descriptions, not the routing logic itself.
 
 ### What's NOT done yet in this phase
-The agent graph is not yet wired into the voice pipeline
-(`test_streaming_loop.py`) — that's the next step, connecting
-`VoiceAgent.run()` in place of the plain `LLMClient` calls, then re-adding
-streaming on top (since `graph.invoke()` is currently blocking/non-streaming
-per turn). We'll do that once you've confirmed the routing itself is solid
-via `test_agent_graph.py`.
+~~The agent graph is not yet wired into the voice pipeline~~ — now added:
+`scripts/test_voice_agent.py` wires `VoiceAgent` into the full mic → STT →
+agent → TTS loop.
+
+**Known tradeoff, on purpose:** `VoiceAgent.run()` (via `graph.invoke()`) is
+blocking — router, tool call, and synthesis all complete before you get an
+answer back, so you lose the "starts speaking before it's done thinking"
+benefit that `test_streaming_loop.py` has. What's recovered instead: the
+completed answer is split into sentences (`text_chunker.chunk_text`)
+and streamed to TTS, so playback starts on sentence 1 while sentence 2 is
+still being synthesized — a smaller win than true token streaming, but real.
+
+This is intentionally left as a measurable gap rather than hidden — once
+the eval harness (Phase 5) exists, compare `test_streaming_loop.py` vs
+`test_voice_agent.py` latency numbers directly. That comparison ("added
+tool-calling, here's the measured latency cost, here's what streaming
+recovered") is exactly the kind of before/after story that makes a strong
+resume line, not just a vague "improved performance" claim.
+
+Run it:
+```bash
+python scripts/test_voice_agent.py
+```
 
 ## Next phase
 Phase 4: barge-in / interruption handling with real Silero VAD — the
