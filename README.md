@@ -180,3 +180,119 @@ python scripts/test_voice_agent.py
 Phase 4: barge-in / interruption handling with real Silero VAD — the
 hardest phase. After that, Phase 5 is the eval harness, which will finally
 let you measure and report concrete before/after numbers for your resume.
+
+## Phase 4 — Barge-in / Interruption (added)
+
+This is the hardest phase, so a bit more explanation than usual.
+
+### What's new
+- `orchestrator/audio/vad.py` — real Silero VAD (a small pretrained neural
+  model), replacing `silence_detector.py`'s naive amplitude thresholding
+  for anything that needs to work *while other audio is playing* — a
+  volume threshold would be useless here since the agent's own TTS
+  playback would constantly trigger it.
+- `orchestrator/audio/mic_stream.py` — continuous mic capture in fixed
+  512-sample frames (Silero's required frame size at 16kHz), running for
+  the whole session rather than one bounded recording per turn.
+- `orchestrator/session/state_machine.py` — explicit
+  `LISTENING / THINKING / SPEAKING` states. Every transition prints to the
+  terminal, so you get a live trace of what the system thinks it's doing.
+- `orchestrator/interrupt/controller.py` — a cooperative cancellation flag
+  (see "why threads, not asyncio" below).
+- `scripts/run_barge_in_agent.py` — the full real-time loop tying it
+  together.
+
+### Why threads + cooperative cancellation, not asyncio
+Early in planning this phase I said "asyncio, not threads" for
+cancellation. That was wrong, and worth correcting rather than quietly
+fixing: Cartesia's and Groq's Python SDKs are **synchronous** — there's no
+`await` point inside their blocking calls for `asyncio.Task.cancel()` to
+actually interrupt. You cannot cleanly force-cancel a blocking network call
+from outside in Python.
+
+The correct, standard pattern for this situation is **cooperative
+cancellation**: `InterruptController` is just a `threading.Event`. The TTS
+playback loop checks it after every audio chunk; the LLM streaming
+generator checks it after every token. When barge-in fires, we don't
+force-kill anything — we just flip a flag, and the loop notices within
+tens of milliseconds and exits on its own. This is genuinely how
+production systems handle cancellation across a synchronous SDK boundary,
+not a compromise.
+
+### Architecture
+```
+MAIN THREAD (VAD monitor loop)          WORKER THREAD (spawned per turn)
+─────────────────────────────           ──────────────────────────────
+continuously reads 512-sample
+frames from MicStream, runs
+Silero VAD on each one
+        │
+        ▼
+state == LISTENING:
+  accumulate speech frames,
+  detect end-of-turn (silence
+  run) → spawn worker thread ────────▶  STT (Groq Whisper)
+  → state = THINKING                    │
+        │                               ▼
+state == THINKING:                     stream_response() token by token,
+  still watching for speech-start      checking interrupt_controller
+  (barge-in before audio even          after every token
+  starts playing)                       │
+        │                               ▼ (once first chunk ready)
+state == SPEAKING:                     state = SPEAKING
+  if VAD detects speech-start:                │
+    interrupt_controller.trigger()            ▼
+    state = LISTENING                  stream_and_play() writes audio
+    start accumulating the             chunk by chunk, checking
+    NEW utterance immediately          interrupt_controller after each one
+    (starting with the frame                  │
+    that triggered it, so we           if interrupted: stop immediately,
+    don't lose the first                return False
+    syllable)                          if completed: state = LISTENING
+```
+
+### Scope decision: built on Phase 2's pipeline, not Phase 3's agent
+Barge-in is wired into the **streaming LLM + TTS pipeline** (`LLMClient.stream_response`
++ `TTSClient.stream_and_play`), not the Phase 3 LangGraph agent. The
+reason: those are the pieces that are actually interruptible mid-generation,
+token by token. The agent's `synthesize_node` is a single blocking call —
+there's no mid-generation point to check an interrupt flag inside it. So
+this phase proves barge-in works in isolation, on the simpler pipeline,
+before the next integration step: making the agent's own LLM calls stream
+too, so barge-in and tool-routing work together. That's the natural
+Phase 4.5 / early-Phase-5 task, not part of this phase.
+
+### Setup for this phase
+```bash
+pip install -r requirements.txt   # adds silero-vad
+```
+No new API keys needed — Silero VAD's model ships inside the pip package
+itself (no network fetch at runtime, confirmed while building this).
+
+```bash
+python scripts/run_barge_in_agent.py
+```
+Speak normally, wait for a response, then **try talking over the agent
+while it's mid-sentence** — it should stop within a fraction of a second
+and start listening to your new input. Watch the `[state] ... -> ...`
+lines in the terminal; they're your best debugging tool if something feels
+off.
+
+### What to expect the first time you run this
+- The end-of-turn silence detection (`END_OF_TURN_SILENCE_FRAMES = 25`,
+  ~0.8s) may need tuning — if it cuts you off mid-sentence or waits too
+  long after you're done talking, adjust that constant.
+- Silero's `threshold=0.5` (in `vad.py`) may need tuning for your mic/room
+  — if it's not detecting your speech, or false-triggering on background
+  noise, that's the value to adjust first.
+- The very first interruption you try is the real test of this whole
+  phase. If it doesn't stop the audio near-instantly, tell me exactly what
+  happened (did it finish the sentence? ignore you completely? crash?) —
+  that'll point to which piece needs fixing.
+
+## Next phase
+Phase 5: the eval harness. This is what turns "I built a voice agent" into
+"I built a voice agent and can show measured improvements across N
+iterations" — WER, latency (including barge-in response time), tool-call
+accuracy, and cost per turn, tracked against git commits. This is the
+single highest-leverage remaining piece for your resume framing.

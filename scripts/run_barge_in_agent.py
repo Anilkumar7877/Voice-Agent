@@ -1,0 +1,189 @@
+"""
+Phase 4: full barge-in support. Continuous mic capture + Silero VAD +
+cooperative interruption of in-flight LLM/TTS work.
+
+Architecture (deliberately threads, not asyncio — see README for why):
+- MAIN THREAD: runs the VAD monitor loop. Continuously pulls frames from
+  MicStream, feeds them to VADProcessor, and reacts to speech-start/
+  speech-end events depending on the current SessionState.
+- WORKER THREAD (spawned per turn): does the actual STT -> LLM -> TTS work
+  for one user turn. Runs in the background so the main thread's VAD loop
+  keeps monitoring the mic even while the agent is "thinking" or "speaking"
+  — this is what makes real-time interruption possible.
+
+State transitions:
+  LISTENING --(VAD: speech ends)--> spawn turn worker --> THINKING
+  THINKING  --(worker starts TTS)--> SPEAKING
+  SPEAKING  --(VAD: speech starts)--> interrupt_controller.trigger(),
+                                        LISTENING (start accumulating the
+                                        NEW utterance immediately)
+  SPEAKING  --(worker finishes normally)--> LISTENING
+
+This builds on the Phase 2 streaming pipeline (LLMClient.stream_response +
+text_chunker.chunk_stream + TTSClient.stream_and_play) rather than the
+Phase 3 agent graph, because those are the pieces that are actually
+interruptible mid-generation (token-by-token / chunk-by-chunk). Merging
+tool-routing + barge-in is the natural next step once this is solid on its
+own — see README.
+
+Run: python scripts/run_barge_in_agent.py
+Press Ctrl+C to stop.
+"""
+
+import sys
+import os
+import threading
+import tempfile
+import numpy as np
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from scipy.io.wavfile import write as wav_write
+
+from orchestrator.config import config
+from orchestrator.audio.stt_client import STTClient
+from orchestrator.audio.tts_client import TTSClient
+from orchestrator.audio.text_chunker import chunk_stream
+from orchestrator.audio.vad import VADProcessor
+from orchestrator.audio.mic_stream import MicStream
+from orchestrator.agent.llm_client import LLMClient
+from orchestrator.session.state_machine import SessionStateMachine, SessionState
+from orchestrator.interrupt.controller import InterruptController
+
+# How much silence (in consecutive VAD-silent frames) ends a turn.
+# Each frame is 32ms (512 samples @ 16kHz), so this is a tunable pause length.
+END_OF_TURN_SILENCE_FRAMES = 25  # ~0.8s
+
+
+def run_turn(user_audio: np.ndarray, stt, llm, tts, state, interrupt_controller):
+    """
+    Runs in a background thread: STT -> streaming LLM -> streaming TTS.
+    Checks interrupt_controller throughout (via stream_response and
+    stream_and_play's built-in cooperative checks) so it can be cut short
+    at any point if the user starts talking again.
+    """
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+        wav_write(tmp.name, config.SAMPLE_RATE, user_audio)
+        input_path = tmp.name
+
+    user_text = stt.transcribe(input_path)
+    print(f"\nYou said: {user_text}")
+
+    if not user_text or interrupt_controller.is_set():
+        state.set(SessionState.LISTENING)
+        return
+
+    print("Agent: ", end="", flush=True)
+
+    def printing_token_stream():
+        for token in llm.stream_response(user_text, interrupt_controller=interrupt_controller):
+            print(token, end="", flush=True)
+            yield token
+
+    text_chunks = chunk_stream(printing_token_stream())
+
+    state.set(SessionState.SPEAKING)
+    completed = tts.stream_and_play(text_chunks, interrupt_controller=interrupt_controller)
+    print()
+
+    if completed:
+        state.set(SessionState.LISTENING)
+    # If NOT completed, the VAD monitor loop already moved state to
+    # LISTENING itself when it detected the interruption — don't overwrite
+    # it back here.
+
+
+def main():
+    config.validate()
+
+    stt = STTClient()
+    llm = LLMClient()
+    tts = TTSClient()
+    vad = VADProcessor(sample_rate=config.SAMPLE_RATE)
+    mic = MicStream(sample_rate=config.SAMPLE_RATE)
+    state = SessionStateMachine()
+    interrupt_controller = InterruptController()
+
+    mic.start()
+    print("Listening continuously. Speak anytime — you can also interrupt the agent mid-response.")
+    print("Press Ctrl+C to stop.\n")
+
+    speech_buffer = []
+    silence_frame_count = 0
+    accumulating = False
+    in_speech = False  # tracks whether we're currently INSIDE a detected
+                        # speech segment, per VAD's own start/end events —
+                        # NOT inferred from None, which just means "no
+                        # transition this frame" and says nothing about
+                        # whether that frame was speech or silence.
+
+    try:
+        while True:
+            frame = mic.get_frame(timeout=1.0)
+            vad_event = vad.process_frame(frame)
+
+            if state.state == SessionState.SPEAKING:
+                if vad_event and "start" in vad_event:
+                    interrupt_controller.trigger()
+                    state.set(SessionState.LISTENING)
+                    speech_buffer = [frame]
+                    accumulating = True
+                    in_speech = True
+                    silence_frame_count = 0
+                continue
+
+            if state.state == SessionState.THINKING:
+                if vad_event and "start" in vad_event:
+                    interrupt_controller.trigger()
+                continue
+
+            # state == LISTENING: accumulate speech, detect end-of-turn
+            if vad_event and "start" in vad_event:
+                if not accumulating:
+                    speech_buffer = [frame]
+                else:
+                    speech_buffer.append(frame)  # resuming after a brief dip — keep the buffer
+                accumulating = True
+                in_speech = True
+                silence_frame_count = 0
+            elif accumulating:
+                speech_buffer.append(frame)
+
+                if vad_event and "end" in vad_event:
+                    in_speech = False
+                    silence_frame_count = 1  # start counting from this frame
+                elif in_speech:
+                    # Still inside an active speech segment per VAD's own
+                    # state — None here means "still speaking," not
+                    # "silence." Do NOT count this toward end-of-turn.
+                    silence_frame_count = 0
+                else:
+                    # Genuinely past the 'end' event — this None really is
+                    # silence, so it's safe to count it.
+                    silence_frame_count += 1
+
+                if not in_speech and silence_frame_count >= END_OF_TURN_SILENCE_FRAMES:
+                    user_audio = np.concatenate(speech_buffer, axis=0)
+                    speech_buffer = []
+                    accumulating = False
+                    in_speech = False
+                    silence_frame_count = 0
+                    vad.reset()
+                    interrupt_controller.clear()
+
+                    state.set(SessionState.THINKING)
+                    turn_thread = threading.Thread(
+                        target=run_turn,
+                        args=(user_audio, stt, llm, tts, state, interrupt_controller),
+                        daemon=True,
+                    )
+                    turn_thread.start()
+
+    except KeyboardInterrupt:
+        print("\nStopping...")
+    finally:
+        mic.stop()
+
+
+if __name__ == "__main__":
+    main()

@@ -37,12 +37,19 @@ class LLMClient:
         )
         return completion.choices[0].message.content.strip()
 
-    def stream_response(self, user_text: str):
+    def stream_response(self, user_text: str, interrupt_controller=None):
         """
         Yield the LLM's reply token-by-token as it's generated, instead of
         waiting for the full response. This is what makes low end-to-end
         latency possible — we can start sending text to TTS before the LLM
         has finished "thinking."
+
+        interrupt_controller: if provided, checked after every token —
+        stops yielding immediately (and the underlying stream is abandoned)
+        if the user has started talking over the agent. This is the
+        cooperative-cancellation pattern: we can't force-cancel the
+        in-flight Groq HTTP stream from outside, so we simply stop
+        consuming it and let it close naturally.
 
         Yields: str chunks (usually a few characters / one token at a time).
         """
@@ -57,6 +64,8 @@ class LLMClient:
             stream=True,
         )
         for chunk in stream:
+            if interrupt_controller and interrupt_controller.is_set():
+                return
             delta = chunk.choices[0].delta.content
             if delta:
                 yield delta

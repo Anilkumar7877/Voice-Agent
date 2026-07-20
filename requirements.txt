@@ -11,3 +11,6 @@ chromadb==0.5.23
 sentence-transformers==3.3.1
 tavily-python==0.5.0
 
+# Phase 4 - barge-in / VAD
+silero-vad==5.1.2
+
