@@ -27,6 +27,29 @@ from orchestrator.agent.tools.web_search_tool import WebSearchTool
 
 groq_client = Groq(api_key=config.GROQ_API_KEY)
 
+# Instantiated ONCE at module load, not per-call. RAGTool loads a
+# sentence-transformer embedding model and connects to Chroma in its
+# __init__ — recreating it on every single "rag" turn was adding several
+# seconds of pure model-loading overhead to every RAG question, which the
+# eval harness's latency numbers made obvious (RAG questions were ~2x
+# slower than web_search/direct ones for no algorithmic reason).
+_rag_tool = None
+_web_search_tool = None
+
+
+def get_rag_tool() -> RAGTool:
+    global _rag_tool
+    if _rag_tool is None:
+        _rag_tool = RAGTool()
+    return _rag_tool
+
+
+def get_web_search_tool() -> WebSearchTool:
+    global _web_search_tool
+    if _web_search_tool is None:
+        _web_search_tool = WebSearchTool()
+    return _web_search_tool
+
 
 class AgentState(TypedDict):
     question: str
@@ -43,11 +66,15 @@ nothing else:
 - "rag" if the question is about internal company policy, HR, onboarding, \
 expenses, leave, or engineering processes/runbooks — anything an internal \
 knowledge base would cover.
-- "web_search" if the question needs current, real-world, or general \
-knowledge information not specific to an internal company (news, facts, \
-public information, anything time-sensitive).
-- "direct" if the question is small talk, a simple request, or something \
-you can answer confidently without looking anything up.
+- "web_search" if the question needs CURRENT or TIME-SENSITIVE information \
+that changes over time — news, prices, scores, weather, "latest version of X", \
+or anything where the answer today could differ from the answer a year ago.
+- "direct" if the question is small talk, OR asks about a well-established, \
+settled concept you already know confidently (how something works, a \
+definition, a historical fact, general science/technology explanations) \
+where the answer does NOT change over time. Prefer "direct" over \
+"web_search" whenever the underlying fact is stable, even if the topic \
+sounds technical or informational.
 
 Question: {question}
 
@@ -99,13 +126,13 @@ def route_node(state: AgentState) -> AgentState:
 
 
 def rag_node(state: AgentState) -> AgentState:
-    rag_tool = RAGTool()
+    rag_tool = get_rag_tool()
     result = rag_tool.query(state["question"])
     return {**state, "tool_output": result["context"], "sources": result["sources"]}
 
 
 def web_search_node(state: AgentState) -> AgentState:
-    web_tool = WebSearchTool()
+    web_tool = get_web_search_tool()
     result = web_tool.query(state["question"])
     return {**state, "tool_output": result["context"], "sources": result["sources"]}
 

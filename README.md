@@ -296,3 +296,63 @@ Phase 5: the eval harness. This is what turns "I built a voice agent" into
 iterations" — WER, latency (including barge-in response time), tool-call
 accuracy, and cost per turn, tracked against git commits. This is the
 single highest-leverage remaining piece for your resume framing.
+
+## Phase 5 — Eval Harness, first cut (added)
+
+### Scope of this cut
+This version scores **tool-call accuracy**, **task success** (LLM-as-judge),
+and **latency**, run against the Phase 3 agent directly via text (no audio
+needed — fast to run, good for iterating on prompts/routing). WER and
+barge-in response time need actual audio test clips and simulated
+interruption — that's a natural follow-up once this core version proves
+useful, not part of this cut.
+
+### What's new
+- `eval/test_cases/scenarios.json` — 12 test questions (5 rag, 4
+  web_search, 3 direct), each with an `expected_tool` and a `ground_truth`
+  reference answer for scoring.
+- `eval/scorers/tool_accuracy_scorer.py` — rule-based, no LLM: did the
+  agent pick the tool we expected.
+- `eval/scorers/llm_judge_scorer.py` — LLM-as-judge: does the agent's
+  actual answer match the ground truth semantically (scored
+  correct/partial/incorrect, not exact string match — wording can differ
+  and still be right).
+- `eval/results_db.py` — SQLite storage, every row tagged with the current
+  git commit hash (via `git rev-parse --short HEAD`). This is what makes
+  "compare before and after a change" possible — run the eval, make a
+  change, commit, run the eval again, and the two results sit side by side
+  tagged by commit.
+- `eval/runner.py` — runs every scenario through `VoiceAgent.run()`,
+  scores each, prints a live summary, saves everything to SQLite.
+- `eval/show_history.py` — prints the aggregate metrics per commit you've
+  evaluated, plus a first-vs-most-recent comparison. **This is the table
+  your resume line comes from.**
+
+### Running it
+```bash
+python eval/runner.py          # run the eval against your current code
+# ... make a change, commit it ...
+python eval/runner.py          # run again — new commit hash tags this run
+python eval/show_history.py    # see the before/after comparison
+```
+
+### Verified before handing this over
+I ran the full DB write → aggregate → comparison flow with simulated data
+(two fake "commits," one deliberately worse than the other) and confirmed
+`show_history.py` correctly shows the improvement — 60%→100% tool
+accuracy, 2.5s→1.8s latency, formatted exactly like your real results will
+look. The scorer logic and runner haven't been run against your real Groq
+key yet — that's the next step.
+
+### A note on the LLM-judge scorer
+It's not perfectly deterministic — you may see slightly different
+correct/partial/incorrect calls on two runs of *identical* code, since
+that's inherent to using an LLM as a judge. This is worth knowing rather
+than treating single eval runs as absolute truth: look at trends across
+several runs, not one run in isolation, especially for borderline cases.
+
+## Next phase
+Phase 6: polish — resume framing, demo prep, and closing the loop on the
+things intentionally deferred earlier (WER scoring with real audio,
+barge-in response time measurement, merging tool-routing with the
+streaming/barge-in pipeline).

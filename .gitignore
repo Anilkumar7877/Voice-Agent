@@ -8,9 +8,14 @@ __pycache__/
 *.pyo
 .pytest_cache/
 
+# Eval harness results (regenerable, don't commit)
+eval/results.sqlite
+
 # Generated audio (test outputs, not source)
 *.wav
-!eval/test_cases/audio_clips/*.wav
+
+# Local vector store data (regenerable via scripts/seed_dummy_kb.py)
+data/chroma_db/
 
 # OS
 .DS_Store
@@ -23,6 +28,3 @@ Thumbs.db
 # Node (for later phases)
 node_modules/
 .next/
-
-# Local databases and dummy data
-data/

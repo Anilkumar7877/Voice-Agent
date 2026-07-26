@@ -1,0 +1,80 @@
+[
+  {
+    "id": "eval_001",
+    "question": "How many vacation days do I get per year?",
+    "expected_tool": "rag",
+    "ground_truth": "18 days of paid annual leave per year, plus 10 public holidays. Unused leave can carry over up to 5 days."
+  },
+  {
+    "id": "eval_002",
+    "question": "What's the process for getting reimbursed for expenses?",
+    "expected_tool": "rag",
+    "ground_truth": "Submit receipts within 30 days of purchase through the internal finance portal. Approvals take 3-5 business days."
+  },
+  {
+    "id": "eval_003",
+    "question": "Can I work from home?",
+    "expected_tool": "rag",
+    "ground_truth": "Remote work is allowed up to 3 days per week. Full remote requires manager approval, reviewed quarterly."
+  },
+  {
+    "id": "eval_004",
+    "question": "What happens during onboarding for new hires?",
+    "expected_tool": "rag",
+    "ground_truth": "A 2-week onboarding program covering company tools, security training, and a team meet-and-greet. A buddy is assigned for the first month."
+  },
+  {
+    "id": "eval_005",
+    "question": "Where can I find the on-call rotation schedule?",
+    "expected_tool": "rag",
+    "ground_truth": "The internal engineering wiki documents the on-call rotation, incident runbooks, and escalation contacts."
+  },
+  {
+    "id": "eval_006",
+    "question": "What's the current weather in Mumbai?",
+    "expected_tool": "web_search",
+    "ground_truth": "Not gradable for content — weather changes constantly. Only tool routing (web_search) is meaningful to check here.",
+    "skip_task_scoring": true
+  },
+  {
+    "id": "eval_007",
+    "question": "Who won the most recent Cricket World Cup?",
+    "expected_tool": "web_search",
+    "ground_truth": "Not gradable for content — 'most recent' changes over time, and an LLM judge without live search shares the same training-cutoff blind spot as the agent. Only tool routing (web_search) is meaningful to check here.",
+    "skip_task_scoring": true
+  },
+  {
+    "id": "eval_008",
+    "question": "What's the latest version of Python?",
+    "expected_tool": "web_search",
+    "ground_truth": "Not gradable for content — this changes with each release. Only tool routing (web_search) is meaningful to check here.",
+    "skip_task_scoring": true
+  },
+  {
+    "id": "eval_009",
+    "question": "What's a good stock price for Nvidia right now?",
+    "expected_tool": "web_search",
+    "ground_truth": "Not gradable for content — stock prices change by the second. Only tool routing (web_search) is meaningful to check here.",
+    "skip_task_scoring": true
+  },
+  {
+    "id": "eval_010",
+    "question": "Hey, how's it going?",
+    "expected_tool": "direct",
+    "ground_truth": "Not gradable for content — pure small talk with no factual claim to check. Only tool routing (direct, no tool call) is meaningful to check here.",
+    "skip_task_scoring": true
+  },
+  {
+    "id": "eval_011",
+    "question": "Can you explain what photosynthesis is?",
+    "expected_tool": "direct",
+    "ground_truth": "Photosynthesis is the process plants use to convert sunlight, water, and carbon dioxide into glucose (energy) and oxygen, occurring mainly in the chloroplasts of plant cells."
+  },
+  {
+    "id": "eval_012",
+    "question": "Thanks, that's all for now.",
+    "expected_tool": "direct",
+    "ground_truth": "Not gradable for content — pure conversational closing with no factual claim to check. Only tool routing (direct, no tool call) is meaningful to check here.",
+    "skip_task_scoring": true
+  }
+]
