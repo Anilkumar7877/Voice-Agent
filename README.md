@@ -252,15 +252,8 @@ state == SPEAKING:                     state = SPEAKING
 ```
 
 ### Scope decision: built on Phase 2's pipeline, not Phase 3's agent
-Barge-in is wired into the **streaming LLM + TTS pipeline** (`LLMClient.stream_response`
-+ `TTSClient.stream_and_play`), not the Phase 3 LangGraph agent. The
-reason: those are the pieces that are actually interruptible mid-generation,
-token by token. The agent's `synthesize_node` is a single blocking call —
-there's no mid-generation point to check an interrupt flag inside it. So
-this phase proves barge-in works in isolation, on the simpler pipeline,
-before the next integration step: making the agent's own LLM calls stream
-too, so barge-in and tool-routing work together. That's the natural
-Phase 4.5 / early-Phase-5 task, not part of this phase.
+~~Barge-in is wired into the streaming LLM + TTS pipeline~~ — **now merged
+with tool-routing, see below.**
 
 ### Setup for this phase
 ```bash
@@ -356,3 +349,55 @@ Phase 6: polish — resume framing, demo prep, and closing the loop on the
 things intentionally deferred earlier (WER scoring with real audio,
 barge-in response time measurement, merging tool-routing with the
 streaming/barge-in pipeline).
+
+## Phase 5.5 — Merging barge-in with tool-routing (added)
+
+This closes the gap Phase 4 deliberately left open: `run_barge_in_agent.py`
+now actually calls the RAG/web-search tools, not a plain LLM.
+
+### The core architectural move
+`graph.invoke()` (the full LangGraph pipeline from Phase 3) runs
+route → tool → synthesize as ONE blocking call — there's no point inside
+it to check an interrupt flag mid-generation. So the agent is split into
+two pieces, both in `orchestrator/agent/graph.py`:
+
+- **`route_and_retrieve(question)`** — runs just the routing + tool-call
+  part (calls the same `route_node`/`rag_node`/`web_search_node`/
+  `direct_node` functions the full graph uses, just without going through
+  LangGraph's runtime). This stays blocking — it's usually one or two
+  network calls, done in under ~2s, and making *this* part interruptible
+  wasn't worth the complexity.
+- **`stream_synthesis(question, tool_output, interrupt_controller)`** —
+  the actual answer generation, now streaming token-by-token with the
+  same cooperative-interrupt check as `LLMClient.stream_response`. This
+  is the part that can be cut off mid-sentence during barge-in.
+
+`run_barge_in_agent.py`'s `run_turn()` now calls these two in sequence,
+with an interrupt check in between — if the user starts talking again
+while `route_and_retrieve` is running (before any audio has even started),
+the turn is abandoned before wasting a TTS call on an answer nobody wants.
+
+The original `VoiceAgent` / `build_graph()` (the full blocking pipeline)
+is untouched and still used by `test_agent_graph.py` and the eval harness,
+where streaming doesn't matter and the simpler interface is preferable.
+
+### Verified before handing over
+Tested both new functions with mocked Groq responses (no real API calls):
+confirmed `route_and_retrieve` correctly routes and returns tool output,
+confirmed `stream_synthesis` correctly yields tokens as they arrive, and
+confirmed it correctly **stops mid-generation** when the interrupt
+controller fires partway through — the exact behavior barge-in depends on.
+
+### What to test on your end
+Run `python scripts/run_barge_in_agent.py` again — same as Phase 4, but
+now ask something that should hit the dummy KB or web search (not just
+generic small talk), and confirm:
+1. It prints `[Tool used: rag]` (or `web_search`/`direct`) before speaking
+2. Barge-in still works — interrupting mid-sentence should feel identical
+   to Phase 4's test, just now backed by real tool calls instead of a
+   plain LLM
+
+## Next phase
+Phase 6: polish — resume framing, demo prep, and closing the loop on the
+remaining deferred items (WER scoring with real audio, barge-in response
+time measurement in the eval harness).

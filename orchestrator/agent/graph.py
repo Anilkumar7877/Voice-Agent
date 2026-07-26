@@ -163,6 +163,77 @@ def route_decision(state: AgentState) -> Literal["rag", "web_search", "direct"]:
     return state["tool_choice"]
 
 
+def route_and_retrieve(question: str) -> AgentState:
+    """
+    Runs ONLY the routing + tool-retrieval portion of the agent
+    (route -> rag/web_search/direct), stopping BEFORE synthesis.
+
+    Why this exists separately from the full graph: the barge-in
+    orchestrator needs the answer-generation step to stream token-by-token
+    so it can be interrupted mid-sentence — something a single blocking
+    graph.invoke() call can't do (see synthesize_node, which returns the
+    complete answer in one call). Routing + retrieval, by contrast, is
+    short (one or two network calls, under ~2s typically) and isn't worth
+    making interruptible — by the time it's done, we check the interrupt
+    flag once before moving on to the part that actually needs to stream.
+
+    This calls the same node functions the full LangGraph graph uses
+    (route_node, rag_node, etc.) directly, without going through
+    LangGraph's runtime — they're plain functions operating on a state
+    dict, so there's no need for the graph machinery here.
+    """
+    state: AgentState = {
+        "question": question,
+        "tool_choice": "",
+        "tool_output": "",
+        "sources": [],
+        "final_answer": "",
+    }
+    state = route_node(state)
+    tool_choice = state["tool_choice"]
+
+    if tool_choice == "rag":
+        state = rag_node(state)
+    elif tool_choice == "web_search":
+        state = web_search_node(state)
+    else:
+        state = direct_node(state)
+
+    return state
+
+
+def stream_synthesis(question: str, tool_output: str, interrupt_controller=None):
+    """
+    The streaming, interruptible counterpart to synthesize_node. Same two
+    prompt templates (SYNTHESIS_PROMPT_WITH_CONTEXT / SYNTHESIS_PROMPT_DIRECT),
+    but yields tokens as they're generated instead of returning the
+    complete answer in one call — this is what lets barge-in cut off the
+    agent's answer mid-sentence, exactly like LLMClient.stream_response
+    does for the tool-less pipeline.
+
+    interrupt_controller: checked after every token, same cooperative-
+    cancellation pattern as everywhere else in this codebase.
+    """
+    if tool_output:
+        prompt = SYNTHESIS_PROMPT_WITH_CONTEXT.format(context=tool_output, question=question)
+    else:
+        prompt = SYNTHESIS_PROMPT_DIRECT.format(question=question)
+
+    stream = groq_client.chat.completions.create(
+        model=config.GROQ_LLM_MODEL,
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
+        max_tokens=200,
+        stream=True,
+    )
+    for chunk in stream:
+        if interrupt_controller and interrupt_controller.is_set():
+            return
+        delta = chunk.choices[0].delta.content
+        if delta:
+            yield delta
+
+
 def build_graph():
     graph = StateGraph(AgentState)
 

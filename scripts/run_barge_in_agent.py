@@ -1,15 +1,16 @@
 """
-Phase 4: full barge-in support. Continuous mic capture + Silero VAD +
-cooperative interruption of in-flight LLM/TTS work.
+Full barge-in support MERGED with tool-routing agent. Continuous mic
+capture + Silero VAD + cooperative interruption, now with the agent
+actually calling RAG/web-search tools instead of a plain LLM.
 
 Architecture (deliberately threads, not asyncio — see README for why):
 - MAIN THREAD: runs the VAD monitor loop. Continuously pulls frames from
   MicStream, feeds them to VADProcessor, and reacts to speech-start/
   speech-end events depending on the current SessionState.
-- WORKER THREAD (spawned per turn): does the actual STT -> LLM -> TTS work
-  for one user turn. Runs in the background so the main thread's VAD loop
-  keeps monitoring the mic even while the agent is "thinking" or "speaking"
-  — this is what makes real-time interruption possible.
+- WORKER THREAD (spawned per turn): does the actual work for one user
+  turn: STT -> route_and_retrieve() (fast, blocking: decide + call the
+  right tool) -> stream_synthesis() (streaming, interruptible: generate
+  the spoken answer token by token) -> TTS playback.
 
 State transitions:
   LISTENING --(VAD: speech ends)--> spawn turn worker --> THINKING
@@ -19,12 +20,17 @@ State transitions:
                                         NEW utterance immediately)
   SPEAKING  --(worker finishes normally)--> LISTENING
 
-This builds on the Phase 2 streaming pipeline (LLMClient.stream_response +
-text_chunker.chunk_stream + TTSClient.stream_and_play) rather than the
-Phase 3 agent graph, because those are the pieces that are actually
-interruptible mid-generation (token-by-token / chunk-by-chunk). Merging
-tool-routing + barge-in is the natural next step once this is solid on its
-own — see README.
+WHY SPLIT ROUTING FROM SYNTHESIS: graph.invoke() (the full LangGraph
+pipeline) runs route -> tool -> synthesize as one blocking call and
+returns the complete answer at once — no point to check an interrupt flag
+mid-generation. So this script uses route_and_retrieve() (just the routing
++ tool call, quick and left as blocking — a turn being "uninterruptible"
+for under ~2s while it decides what to do is an acceptable tradeoff) and
+then stream_synthesis() (the actual answer generation, which DOES stream
+token-by-token and DOES check the interrupt flag) — both from
+orchestrator/agent/graph.py, alongside the original VoiceAgent/build_graph
+which is still used by test_agent_graph.py and the eval harness where
+streaming doesn't matter.
 
 Run: python scripts/run_barge_in_agent.py
 Press Ctrl+C to stop.
@@ -46,21 +52,23 @@ from orchestrator.audio.tts_client import TTSClient
 from orchestrator.audio.text_chunker import chunk_stream
 from orchestrator.audio.vad import VADProcessor
 from orchestrator.audio.mic_stream import MicStream
-from orchestrator.agent.llm_client import LLMClient
+from orchestrator.agent.graph import route_and_retrieve, stream_synthesis
 from orchestrator.session.state_machine import SessionStateMachine, SessionState
 from orchestrator.interrupt.controller import InterruptController
 
 # How much silence (in consecutive VAD-silent frames) ends a turn.
-# Each frame is 32ms (512 samples @ 16kHz), so this is a tunable pause length.
+# Each frame = 512 samples @ 16kHz = 32ms. So 25 frames = 25 * 32ms = ~0.8s
+# of REAL post-speech silence (tracked via the in_speech flag below — VAD
+# returns None during active speech too, so None alone never counts as
+# silence; only None AFTER a real 'end' event counts).
 END_OF_TURN_SILENCE_FRAMES = 25  # ~0.8s
 
 
-def run_turn(user_audio: np.ndarray, stt, llm, tts, state, interrupt_controller):
+def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller):
     """
-    Runs in a background thread: STT -> streaming LLM -> streaming TTS.
-    Checks interrupt_controller throughout (via stream_response and
-    stream_and_play's built-in cooperative checks) so it can be cut short
-    at any point if the user starts talking again.
+    Runs in a background thread: STT -> route_and_retrieve (tool routing,
+    quick, not interruptible mid-call) -> stream_synthesis (streaming,
+    interruptible token-by-token) -> streaming TTS playback.
     """
     with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
         wav_write(tmp.name, config.SAMPLE_RATE, user_audio)
@@ -73,10 +81,25 @@ def run_turn(user_audio: np.ndarray, stt, llm, tts, state, interrupt_controller)
         state.set(SessionState.LISTENING)
         return
 
+    result = route_and_retrieve(user_text)
+    print(f"[Tool used: {result['tool_choice']}]", end="")
+    if result["sources"]:
+        print(f"  Sources: {result['sources']}", end="")
+    print()
+
+    # The routing+retrieval call above was blocking — check whether the
+    # user started talking again WHILE it was running, before we commit to
+    # speaking a (possibly now-irrelevant) answer.
+    if interrupt_controller.is_set():
+        state.set(SessionState.LISTENING)
+        return
+
     print("Agent: ", end="", flush=True)
 
     def printing_token_stream():
-        for token in llm.stream_response(user_text, interrupt_controller=interrupt_controller):
+        for token in stream_synthesis(
+            user_text, result["tool_output"], interrupt_controller=interrupt_controller
+        ):
             print(token, end="", flush=True)
             yield token
 
@@ -97,7 +120,6 @@ def main():
     config.validate()
 
     stt = STTClient()
-    llm = LLMClient()
     tts = TTSClient()
     vad = VADProcessor(sample_rate=config.SAMPLE_RATE)
     mic = MicStream(sample_rate=config.SAMPLE_RATE)
@@ -174,7 +196,7 @@ def main():
                     state.set(SessionState.THINKING)
                     turn_thread = threading.Thread(
                         target=run_turn,
-                        args=(user_audio, stt, llm, tts, state, interrupt_controller),
+                        args=(user_audio, stt, tts, state, interrupt_controller),
                         daemon=True,
                     )
                     turn_thread.start()
