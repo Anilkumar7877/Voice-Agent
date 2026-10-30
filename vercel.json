@@ -1,14 +1,11 @@
 {
   "version": 2,
+  "outputDirectory": "web",
   "cleanUrls": true,
   "rewrites": [
     {
-      "source": "/",
-      "destination": "/web/index.html"
-    },
-    {
       "source": "/(.*)",
-      "destination": "/web/$1"
+      "destination": "/$1"
     }
   ]
 }
