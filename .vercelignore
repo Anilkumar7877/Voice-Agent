@@ -1,0 +1,10 @@
+# Ignore Python files and requirements so Vercel does not detect Python functions
+requirements.txt
+Dockerfile
+orchestrator/
+scripts/
+eval/
+data/
+venv/
+.venv/
+*.py

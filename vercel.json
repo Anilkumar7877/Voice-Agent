@@ -1,11 +1,15 @@
 {
   "version": 2,
-  "outputDirectory": "web",
-  "cleanUrls": true,
-  "rewrites": [
+  "builds": [
     {
-      "source": "/(.*)",
-      "destination": "/$1"
+      "src": "web/**",
+      "use": "@vercel/static"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "/web/$1"
     }
   ]
 }
