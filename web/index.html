@@ -869,7 +869,12 @@
             const storedWs = localStorage.getItem('voice_agent_ws_url');
             if (storedWs) return storedWs;
 
-            // Default to local python broadcaster port
+            // If running on deployed domain (e.g. Vercel), default to Cloud Run endpoint
+            if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
+                return 'wss://voice-agent-server-140945181753.us-central1.run.app';
+            }
+
+            // Default to local python broadcaster port when testing locally
             return 'ws://127.0.0.1:8765';
         }
 
