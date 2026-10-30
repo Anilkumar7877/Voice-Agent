@@ -1,0 +1,1018 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Agent Live Visualizer</title>
+    
+    <!-- Google Fonts: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    
+    <style>
+        :root {
+            --bg-base: #030712;
+            --card-bg: rgba(17, 24, 39, 0.65);
+            --border-glow: rgba(255, 255, 255, 0.08);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            
+            /* State Colors */
+            --color-listening: #06b6d4;      /* Cyan */
+            --color-listening-rgb: 6, 182, 212;
+            --color-thinking: #a855f7;       /* Purple */
+            --color-thinking-rgb: 168, 85, 247;
+            --color-speaking: #f43f5e;       /* Rose */
+            --color-speaking-rgb: 244, 63, 94;
+            --color-idle: #4b5563;           /* Slate */
+            --color-idle-rgb: 75, 85, 99;
+            
+            /* Tool Badge Colors */
+            --badge-rag: #10b981;
+            --badge-web: #f59e0b;
+            --badge-direct: #3b82f6;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            position: relative;
+        }
+
+        /* Animated background blobs for premium aesthetic */
+        .bg-blob {
+            position: absolute;
+            width: 500px;
+            height: 500px;
+            border-radius: 50%;
+            filter: blur(140px);
+            opacity: 0.15;
+            z-index: 0;
+            pointer-events: none;
+            transition: all 1.5s ease-in-out;
+        }
+
+        .blob-1 {
+            top: -100px;
+            left: -100px;
+            background: radial-gradient(circle, var(--color-listening) 0%, transparent 80%);
+        }
+
+        .blob-2 {
+            bottom: -150px;
+            right: -100px;
+            background: radial-gradient(circle, var(--color-thinking) 0%, transparent 80%);
+        }
+
+        /* State updates dynamically color-shift the background blobs */
+        body.state-listening .blob-1 { background: radial-gradient(circle, var(--color-listening) 0%, transparent 80%); opacity: 0.25; }
+        body.state-listening .blob-2 { background: radial-gradient(circle, var(--color-listening) 0%, transparent 80%); opacity: 0.1; }
+
+        body.state-thinking .blob-1 { background: radial-gradient(circle, var(--color-thinking) 0%, transparent 80%); opacity: 0.1; }
+        body.state-thinking .blob-2 { background: radial-gradient(circle, var(--color-thinking) 0%, transparent 80%); opacity: 0.25; }
+
+        body.state-speaking .blob-1 { background: radial-gradient(circle, var(--color-speaking) 0%, transparent 80%); opacity: 0.25; }
+        body.state-speaking .blob-2 { background: radial-gradient(circle, var(--color-speaking) 0%, transparent 80%); opacity: 0.25; }
+
+        /* Main Container Card (Glassmorphism) */
+        .visualizer-container {
+            width: 95%;
+            max-width: 1300px;
+            height: 90vh;
+            max-height: 850px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-glow);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border-radius: 28px;
+            padding: 32px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            z-index: 10;
+            position: relative;
+        }
+
+        /* Header Layout */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 16px;
+        }
+
+        .title-area h1 {
+            font-size: 20px;
+            font-weight: 700;
+            letter-spacing: -0.5px;
+            background: linear-gradient(135deg, #ffffff 0%, #e2e8f0 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .title-area p {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            cursor: pointer;
+            user-select: none;
+            transition: all 0.2s ease;
+        }
+
+        .status-badge:hover {
+            background: rgba(255, 255, 255, 0.08);
+            border-color: rgba(255, 255, 255, 0.15);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background-color: #ef4444; /* Default Disconnected */
+            box-shadow: 0 0 8px #ef4444;
+            transition: all 0.3s ease;
+        }
+
+        .status-dot.connected {
+            background-color: #10b981;
+            box-shadow: 0 0 12px #10b981;
+            animation: status-pulse 2s infinite;
+        }
+
+        @keyframes status-pulse {
+            0% { box-shadow: 0 0 4px rgba(16, 185, 129, 0.4); }
+            50% { box-shadow: 0 0 12px rgba(16, 185, 129, 0.8); }
+            100% { box-shadow: 0 0 4px rgba(16, 185, 129, 0.4); }
+        }
+
+        /* Main side-by-side content layout */
+        .main-content {
+            display: flex;
+            flex-direction: row;
+            align-items: stretch;
+            gap: 32px;
+            flex: 1;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        /* Center Animation Stage */
+        .stage {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 240px;
+            position: relative;
+            background: rgba(0, 0, 0, 0.15);
+            border: 1px solid rgba(255, 255, 255, 0.02);
+            border-radius: 20px;
+            padding: 24px;
+        }
+
+        /* Current State Labels */
+        .state-label {
+            margin-top: 36px;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            transition: color 0.4s ease;
+        }
+
+        /* Animation: LISTENING State (Pulsing Sphere) */
+        .visual-listening {
+            display: none;
+            position: relative;
+            width: 100px;
+            height: 100px;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .sphere {
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            background: radial-gradient(circle at 30% 30%, #22d3ee, #0891b2);
+            box-shadow: 0 0 30px rgba(6, 182, 212, 0.5), inset -5px -5px 15px rgba(0, 0, 0, 0.4);
+            animation: sphere-hover 4s ease-in-out infinite;
+            z-index: 2;
+        }
+
+        .pulse-ring {
+            position: absolute;
+            width: 100px;
+            height: 100px;
+            border-radius: 50%;
+            border: 2px solid rgba(6, 182, 212, 0.4);
+            animation: listening-pulse 2s infinite ease-out;
+            z-index: 1;
+        }
+
+        .pulse-ring:nth-child(2) {
+            animation-delay: 0.6s;
+        }
+
+        .pulse-ring:nth-child(3) {
+            animation-delay: 1.2s;
+        }
+
+        @keyframes sphere-hover {
+            0%, 100% { transform: translateY(0) scale(1); }
+            50% { transform: translateY(-6px) scale(1.03); }
+        }
+
+        @keyframes listening-pulse {
+            0% {
+                transform: scale(0.6);
+                opacity: 1;
+            }
+            100% {
+                transform: scale(1.8);
+                opacity: 0;
+            }
+        }
+
+        /* Animation: THINKING State (Gradient Ring Loader) */
+        .visual-thinking {
+            display: none;
+            position: relative;
+            width: 80px;
+            height: 80px;
+        }
+
+        .loader-ring {
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            padding: 4px;
+            background: linear-gradient(135deg, var(--color-thinking) 0%, transparent 70%, var(--color-thinking) 100%);
+            -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+            -webkit-mask-composite: xor;
+            mask-composite: exclude;
+            animation: spin 1.2s linear infinite;
+        }
+
+        .loader-glow {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            box-shadow: 0 0 25px rgba(168, 85, 247, 0.4);
+            animation: thinking-glow 2s ease-in-out infinite alternate;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        @keyframes thinking-glow {
+            0% { opacity: 0.3; transform: scale(0.95); }
+            100% { opacity: 0.8; transform: scale(1.05); }
+        }
+
+        /* Animation: SPEAKING State (Waveform Bars) */
+        .visual-speaking {
+            display: none;
+            gap: 6px;
+            align-items: center;
+            height: 70px;
+        }
+
+        .wave-bar {
+            width: 6px;
+            height: 12px;
+            background: linear-gradient(to top, #ec4899, #f43f5e);
+            border-radius: 4px;
+            box-shadow: 0 0 10px rgba(244, 63, 94, 0.4);
+            animation: bounce-bar 1.2s ease-in-out infinite;
+        }
+
+        /* Varied animation delays for waveform appearance */
+        .wave-bar:nth-child(1) { height: 16px; animation-delay: 0.1s; }
+        .wave-bar:nth-child(2) { height: 28px; animation-delay: 0.3s; }
+        .wave-bar:nth-child(3) { height: 42px; animation-delay: 0.5s; }
+        .wave-bar:nth-child(4) { height: 56px; animation-delay: 0.7s; }
+        .wave-bar:nth-child(5) { height: 36px; animation-delay: 0.9s; }
+        .wave-bar:nth-child(6) { height: 48px; animation-delay: 0.4s; }
+        .wave-bar:nth-child(7) { height: 20px; animation-delay: 0.2s; }
+
+        @keyframes bounce-bar {
+            0%, 100% { transform: scaleY(1); }
+            50% { transform: scaleY(2.2); }
+        }
+
+        /* IDLE State (Faded Pulse) */
+        .visual-idle {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            width: 70px;
+            height: 70px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .visual-idle::after {
+            content: '';
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background-color: var(--color-idle);
+        }
+
+        /* Show/Hide Animations based on Body Class */
+        body.state-listening .visual-listening { display: flex; }
+        body.state-listening .visual-idle { display: none; }
+        body.state-listening .state-label { color: var(--color-listening); }
+
+        body.state-thinking .visual-thinking { display: block; }
+        body.state-thinking .visual-idle { display: none; }
+        body.state-thinking .state-label { color: var(--color-thinking); }
+
+        body.state-speaking .visual-speaking { display: flex; }
+        body.state-speaking .visual-idle { display: none; }
+        body.state-speaking .state-label { color: var(--color-speaking); }
+        
+        body.state-idle .state-label { color: var(--color-idle); }
+
+        /* Transcript Panel (Scrollable Card Section) */
+        .transcript-panel {
+            flex: 2;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid rgba(255, 255, 255, 0.04);
+            border-radius: 20px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 12px 20px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            background: rgba(255, 255, 255, 0.01);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header span {
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .panel-header .clear-btn {
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border: none;
+            background: none;
+            transition: color 0.2s;
+        }
+
+        .panel-header .clear-btn:hover {
+            color: var(--text-primary);
+        }
+
+        .transcript-list {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            scroll-behavior: smooth;
+        }
+
+        /* Custom Scrollbar */
+        .transcript-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .transcript-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .transcript-list::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 10px;
+        }
+
+        .transcript-list::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.20);
+        }
+
+        /* Individual Chat Bubbles */
+        .msg {
+            display: flex;
+            flex-direction: column;
+            max-width: 92%;
+            animation: msg-appear 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        @keyframes msg-appear {
+            0% { opacity: 0; transform: translateY(8px); }
+            100% { opacity: 1; transform: translateY(0); }
+        }
+
+        .msg-sender {
+            font-size: 11px;
+            font-weight: 600;
+            margin-bottom: 4px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .msg-bubble {
+            padding: 12px 16px;
+            border-radius: 16px;
+            font-size: 14px;
+            line-height: 1.5;
+            word-break: break-word;
+        }
+
+        /* User Message specific styling */
+        .msg.user {
+            align-self: flex-end;
+        }
+        
+        .msg.user .msg-sender {
+            align-self: flex-end;
+            color: #60a5fa;
+        }
+
+        .msg.user .msg-bubble {
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.15) 0%, rgba(37, 99, 235, 0.05) 100%);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            color: #eff6ff;
+            border-bottom-right-radius: 4px;
+        }
+
+        /* Agent Message specific styling */
+        .msg.agent {
+            align-self: flex-start;
+        }
+
+        .msg.agent .msg-sender {
+            color: #ec4899;
+        }
+
+        .msg.agent .msg-bubble {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--text-primary);
+            border-top-left-radius: 4px;
+        }
+
+        /* Tool Routing Badges */
+        .tool-badge {
+            font-size: 9px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 20px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border: 1px solid transparent;
+        }
+
+        .tool-badge.rag {
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--badge-rag);
+            border-color: rgba(16, 185, 129, 0.2);
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.1);
+        }
+
+        .tool-badge.web_search {
+            background: rgba(245, 158, 11, 0.1);
+            color: var(--badge-web);
+            border-color: rgba(245, 158, 11, 0.2);
+            box-shadow: 0 0 8px rgba(245, 158, 11, 0.1);
+        }
+
+        .tool-badge.direct {
+            background: rgba(59, 130, 246, 0.1);
+            color: var(--badge-direct);
+            border-color: rgba(59, 130, 246, 0.2);
+            box-shadow: 0 0 8px rgba(59, 130, 246, 0.1);
+        }
+
+        /* Typing cursor effect during stream synthesis */
+        .typing-cursor {
+            display: inline-block;
+            width: 3px;
+            height: 15px;
+            background-color: var(--color-speaking);
+            margin-left: 2px;
+            vertical-align: middle;
+            animation: cursor-blink 0.8s infinite;
+        }
+
+        @keyframes cursor-blink {
+            0%, 100% { opacity: 0; }
+            50% { opacity: 1; }
+        }
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .voice-btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            padding: 8px 16px;
+            border-radius: 20px;
+            background: linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%);
+            color: #ffffff;
+            border: none;
+            cursor: pointer;
+            box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+            transition: all 0.2s ease;
+        }
+
+        .voice-btn:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 0 20px rgba(6, 182, 212, 0.5);
+        }
+
+        .voice-btn.active {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 0 15px rgba(16, 185, 129, 0.4);
+        }
+    </style>
+</head>
+<body class="state-idle">
+
+    <!-- Background Blobs -->
+    <div class="bg-blob blob-1"></div>
+    <div class="bg-blob blob-2"></div>
+
+    <!-- Visualizer Dashboard Card -->
+    <div class="visualizer-container">
+        
+        <!-- Header -->
+        <div class="header">
+            <div class="title-area">
+                <h1>Voice Agent Overlay</h1>
+                <p>Live session visualizer</p>
+            </div>
+            <div class="header-actions">
+                <button class="voice-btn" id="start-voice-btn">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"></path>
+                        <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
+                        <line x1="12" y1="19" x2="12" y2="22"></line>
+                    </svg>
+                    <span>Start Voice</span>
+                </button>
+                <div class="status-badge">
+                    <span class="status-dot" id="status-dot"></span>
+                    <span id="status-text">Disconnected</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <!-- Animation Stage -->
+            <div class="stage">
+                
+                <!-- Listening (Pulse) -->
+                <div class="visual-listening" id="visual-listening">
+                    <div class="pulse-ring"></div>
+                    <div class="pulse-ring"></div>
+                    <div class="pulse-ring"></div>
+                    <div class="sphere"></div>
+                </div>
+
+                <!-- Thinking (Ring loader) -->
+                <div class="visual-thinking" id="visual-thinking">
+                    <div class="loader-glow"></div>
+                    <div class="loader-ring"></div>
+                </div>
+
+                <!-- Speaking (Audio Waveform) -->
+                <div class="visual-speaking" id="visual-speaking">
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                    <div class="wave-bar"></div>
+                </div>
+
+                <!-- Idle State -->
+                <div class="visual-idle" id="visual-idle"></div>
+
+                <!-- Live State Text -->
+                <div class="state-label" id="state-label">Idle</div>
+            </div>
+
+            <!-- Transcript Panel -->
+            <div class="transcript-panel">
+                <div class="panel-header">
+                    <span>Live Transcript</span>
+                    <button class="clear-btn" id="clear-btn">Clear</button>
+                </div>
+                <div class="transcript-list" id="transcript-list">
+                    <!-- Chat bubbles will append here -->
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Voice Client Audio Engine -->
+    <script src="voice-client.js"></script>
+
+    <!-- WebSocket Visualizer Logic -->
+    <script>
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const stateLabel = document.getElementById('state-label');
+        const transcriptList = document.getElementById('transcript-list');
+        const clearBtn = document.getElementById('clear-btn');
+
+        let socket = null;
+        let currentAgentMessageElement = null;
+        let currentAgentBubble = null;
+        let isAgentStreaming = false;
+
+        // Sound effect mappings/customizations if any, otherwise simple colors
+        const stateStyles = {
+            listening: { class: 'state-listening', label: 'Listening' },
+            thinking: { class: 'state-thinking', label: 'Thinking' },
+            speaking: { class: 'state-speaking', label: 'Speaking' },
+            idle: { class: 'state-idle', label: 'Idle' }
+        };
+
+        function setVisualState(state) {
+            document.body.className = '';
+            
+            const style = stateStyles[state] || stateStyles.idle;
+            document.body.classList.add(style.class);
+            stateLabel.textContent = style.label;
+        }
+
+        function appendUserMessage(text) {
+            if (!text.trim()) return;
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'msg user';
+
+            const sender = document.createElement('div');
+            sender.className = 'msg-sender';
+            sender.textContent = 'You';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'msg-bubble';
+            bubble.textContent = text;
+
+            msgDiv.appendChild(sender);
+            msgDiv.appendChild(bubble);
+            transcriptList.appendChild(msgDiv);
+            scrollToBottom();
+        }
+
+        function createAgentBubble(toolType = null, sources = []) {
+            // Remove typing cursor from any old active agent bubble
+            finalizeAgentStreaming();
+
+            const msgDiv = document.createElement('div');
+            msgDiv.className = 'msg agent';
+
+            const sender = document.createElement('div');
+            sender.className = 'msg-sender';
+            sender.innerHTML = 'Agent';
+
+            if (toolType) {
+                const badge = document.createElement('span');
+                badge.className = `tool-badge ${toolType}`;
+                badge.textContent = toolType === 'web_search' ? 'Web Search' : toolType.toUpperCase();
+                sender.appendChild(badge);
+            }
+
+            const bubble = document.createElement('div');
+            bubble.className = 'msg-bubble';
+            
+            // Add typing cursor
+            const cursor = document.createElement('span');
+            cursor.className = 'typing-cursor';
+            
+            bubble.appendChild(cursor);
+            msgDiv.appendChild(sender);
+            msgDiv.appendChild(bubble);
+
+            // Add sources if present
+            if (sources && sources.length > 0) {
+                const sourcesDiv = document.createElement('div');
+                sourcesDiv.className = 'msg-sources';
+                sourcesDiv.style.fontSize = '11px';
+                sourcesDiv.style.color = 'var(--text-secondary)';
+                sourcesDiv.style.marginTop = '8px';
+                sourcesDiv.style.paddingTop = '6px';
+                sourcesDiv.style.borderTop = '1px solid rgba(255, 255, 255, 0.05)';
+                
+                const label = document.createElement('span');
+                label.style.fontWeight = '600';
+                label.textContent = 'Sources: ';
+                sourcesDiv.appendChild(label);
+
+                sources.forEach((src, idx) => {
+                    if (idx > 0) {
+                        sourcesDiv.appendChild(document.createTextNode(', '));
+                    }
+                    if (src.startsWith('http://') || src.startsWith('https://')) {
+                        const link = document.createElement('a');
+                        link.href = src;
+                        link.target = '_blank';
+                        link.style.color = '#60a5fa';
+                        link.style.textDecoration = 'none';
+                        try {
+                            const urlObj = new URL(src);
+                            link.textContent = urlObj.hostname;
+                        } catch (e) {
+                            link.textContent = src;
+                        }
+                        sourcesDiv.appendChild(link);
+                    } else {
+                        const docSpan = document.createElement('span');
+                        docSpan.style.background = 'rgba(255, 255, 255, 0.05)';
+                        docSpan.style.padding = '2px 6px';
+                        docSpan.style.borderRadius = '4px';
+                        docSpan.style.fontFamily = 'monospace';
+                        docSpan.textContent = src;
+                        sourcesDiv.appendChild(docSpan);
+                    }
+                });
+                msgDiv.appendChild(sourcesDiv);
+            }
+            
+            transcriptList.appendChild(msgDiv);
+            scrollToBottom();
+
+            currentAgentMessageElement = msgDiv;
+            currentAgentBubble = bubble;
+            isAgentStreaming = true;
+        }
+
+        function appendAgentToken(token) {
+            if (!isAgentStreaming || !currentAgentBubble) {
+                // Defensive: create an agent bubble if one is not ready
+                createAgentBubble();
+            }
+
+            const cursor = currentAgentBubble.querySelector('.typing-cursor');
+            if (cursor) {
+                // Insert token before the typing cursor
+                const tokenNode = document.createTextNode(token);
+                currentAgentBubble.insertBefore(tokenNode, cursor);
+            } else {
+                currentAgentBubble.appendChild(document.createTextNode(token));
+            }
+            scrollToBottom();
+        }
+
+        function finalizeAgentStreaming() {
+            if (currentAgentBubble) {
+                const cursor = currentAgentBubble.querySelector('.typing-cursor');
+                if (cursor) {
+                    cursor.remove();
+                }
+            }
+            currentAgentMessageElement = null;
+            currentAgentBubble = null;
+            isAgentStreaming = false;
+        }
+
+        function markAgentInterrupted() {
+            if (currentAgentBubble) {
+                const cursor = currentAgentBubble.querySelector('.typing-cursor');
+                if (cursor) {
+                    cursor.remove();
+                }
+                
+                const interruptSpan = document.createElement('span');
+                interruptSpan.style.color = '#ef4444';
+                interruptSpan.style.fontSize = '12px';
+                interruptSpan.style.fontStyle = 'italic';
+                interruptSpan.style.marginLeft = '8px';
+                interruptSpan.style.fontWeight = '500';
+                interruptSpan.textContent = ' (Interrupted)';
+                currentAgentBubble.appendChild(interruptSpan);
+                
+                currentAgentBubble.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                currentAgentBubble.style.boxShadow = '0 0 10px rgba(239, 68, 68, 0.2)';
+            }
+        }
+
+        function scrollToBottom() {
+            transcriptList.scrollTop = transcriptList.scrollHeight;
+        }
+
+        clearBtn.addEventListener('click', () => {
+            transcriptList.innerHTML = '';
+            finalizeAgentStreaming();
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: 'clear_history' }));
+            }
+        });
+
+        // WebSocket Connection Management
+        function getWebSocketUrl() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const queryWs = urlParams.get('ws');
+            if (queryWs) return queryWs;
+
+            const storedWs = localStorage.getItem('voice_agent_ws_url');
+            if (storedWs) return storedWs;
+
+            // Default to local python broadcaster port
+            return 'ws://127.0.0.1:8765';
+        }
+
+        const statusBadge = document.querySelector('.status-badge');
+        if (statusBadge) {
+            statusBadge.setAttribute('title', 'Click to change WebSocket URL');
+            statusBadge.addEventListener('click', () => {
+                const currentUrl = getWebSocketUrl();
+                const newUrl = prompt('Enter Voice Agent WebSocket URL (e.g., ws://127.0.0.1:8765 or wss://your-tunnel.ngrok-free.app):', currentUrl);
+                if (newUrl && newUrl.trim()) {
+                    localStorage.setItem('voice_agent_ws_url', newUrl.trim());
+                    if (socket) {
+                        socket.close();
+                    }
+                    connect();
+                }
+            });
+        }
+
+        let reconnectTimeout = null;
+
+        function connect() {
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+                reconnectTimeout = null;
+            }
+
+            const targetWsUrl = getWebSocketUrl();
+            statusText.textContent = 'Connecting...';
+            statusDot.className = 'status-dot';
+            if (statusBadge) {
+                statusBadge.setAttribute('title', `Connected to: ${targetWsUrl} (Click to change)`);
+            }
+            
+            try {
+                socket = new WebSocket(targetWsUrl);
+                socket.binaryType = "arraybuffer";
+            } catch (err) {
+                console.error('[WebSocket] Initialization error:', err);
+                statusDot.className = 'status-dot';
+                statusText.textContent = 'Config Error';
+                return;
+            }
+
+            socket.onopen = () => {
+                statusDot.className = 'status-dot connected';
+                statusText.textContent = 'Connected';
+                console.log(`[WebSocket] Connected successfully to ${targetWsUrl}`);
+            };
+
+            socket.onmessage = (event) => {
+                if (typeof event.data !== "string") {
+                    window.voicePlayer?.enqueue(event.data);
+                    return;
+                }
+
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('[WebSocket] Event received:', data);
+
+                    if (data.type === "stop_audio") {
+                        window.voicePlayer?.stop();
+                        return;
+                    }
+
+                    if (data.type === "busy") {
+                        alert("Demo is in use, try again later.");
+                        return;
+                    }
+
+                    switch (data.type) {
+                        case 'state':
+                            setVisualState(data.value);
+                            // If we transitioned to listening, check if agent was interrupted
+                            if (data.value === 'listening') {
+                                if (isAgentStreaming) {
+                                    markAgentInterrupted();
+                                }
+                                finalizeAgentStreaming();
+                            }
+                            break;
+                            
+                        case 'user_transcript':
+                            appendUserMessage(data.text);
+                            break;
+                            
+                        case 'tool_used':
+                            createAgentBubble(data.tool, data.sources || []);
+                            break;
+                            
+                        case 'agent_token':
+                            appendAgentToken(data.text);
+                            break;
+                            
+                        case 'agent_done':
+                            finalizeAgentStreaming();
+                            break;
+                            
+                        default:
+                            console.warn('[WebSocket] Unknown event type:', data.type);
+                    }
+                } catch (e) {
+                    console.error('[WebSocket] Failed to parse message:', e, event.data);
+                }
+            };
+
+            socket.onclose = () => {
+                statusDot.className = 'status-dot';
+                statusText.textContent = 'Disconnected';
+                setVisualState('idle');
+                finalizeAgentStreaming();
+                console.log('[WebSocket] Disconnected. Retrying in 3s...');
+                reconnectTimeout = setTimeout(connect, 3000);
+            };
+
+            socket.onerror = (err) => {
+                console.error('[WebSocket] Error occurred:', err);
+                socket.close();
+            };
+        }
+
+        // Hook up Start Voice button
+        const startVoiceBtn = document.getElementById('start-voice-btn');
+        if (startVoiceBtn) {
+            startVoiceBtn.addEventListener('click', async () => {
+                try {
+                    startVoiceBtn.disabled = true;
+                    startVoiceBtn.querySelector('span').textContent = 'Starting...';
+                    await startVoice(socket);
+                    startVoiceBtn.classList.add('active');
+                    startVoiceBtn.querySelector('span').textContent = 'Voice Active';
+                    startVoiceBtn.disabled = false;
+                } catch (err) {
+                    console.error('[Voice] Failed to start voice:', err);
+                    alert('Could not access microphone: ' + err.message);
+                    startVoiceBtn.disabled = false;
+                    startVoiceBtn.querySelector('span').textContent = 'Start Voice';
+                }
+            });
+        }
+
+        // Initialize connection
+        connect();
+    </script>
+</body>
+</html>

@@ -57,6 +57,7 @@ class AgentState(TypedDict):
     tool_output: str        # retrieved context, empty string if direct
     sources: list           # doc IDs or URLs, empty if direct
     final_answer: str
+    chat_history: list      # list of dicts: [{"role": "user"/"assistant", "content": "..."}]
 
 
 ROUTER_PROMPT = """You are a routing component in a voice agent. Decide which \
@@ -103,9 +104,14 @@ Your spoken answer:"""
 
 
 def route_node(state: AgentState) -> AgentState:
+    messages = []
+    for msg in state.get("chat_history", []):
+        messages.append({"role": msg["role"], "content": msg["content"]})
+    messages.append({"role": "user", "content": ROUTER_PROMPT.format(question=state["question"])})
+
     completion = groq_client.chat.completions.create(
         model=config.GROQ_LLM_MODEL,
-        messages=[{"role": "user", "content": ROUTER_PROMPT.format(question=state["question"])}],
+        messages=messages,
         temperature=0,
         max_tokens=10,
     )
@@ -142,6 +148,10 @@ def direct_node(state: AgentState) -> AgentState:
 
 
 def synthesize_node(state: AgentState) -> AgentState:
+    messages = []
+    for msg in state.get("chat_history", []):
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
     if state["tool_output"]:
         prompt = SYNTHESIS_PROMPT_WITH_CONTEXT.format(
             context=state["tool_output"], question=state["question"]
@@ -149,9 +159,11 @@ def synthesize_node(state: AgentState) -> AgentState:
     else:
         prompt = SYNTHESIS_PROMPT_DIRECT.format(question=state["question"])
 
+    messages.append({"role": "user", "content": prompt})
+
     completion = groq_client.chat.completions.create(
         model=config.GROQ_LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         temperature=0.7,
         max_tokens=200,
     )
@@ -163,7 +175,7 @@ def route_decision(state: AgentState) -> Literal["rag", "web_search", "direct"]:
     return state["tool_choice"]
 
 
-def route_and_retrieve(question: str) -> AgentState:
+def route_and_retrieve(question: str, chat_history: list = None) -> AgentState:
     """
     Runs ONLY the routing + tool-retrieval portion of the agent
     (route -> rag/web_search/direct), stopping BEFORE synthesis.
@@ -188,6 +200,7 @@ def route_and_retrieve(question: str) -> AgentState:
         "tool_output": "",
         "sources": [],
         "final_answer": "",
+        "chat_history": chat_history or [],
     }
     state = route_node(state)
     tool_choice = state["tool_choice"]
@@ -202,7 +215,7 @@ def route_and_retrieve(question: str) -> AgentState:
     return state
 
 
-def stream_synthesis(question: str, tool_output: str, interrupt_controller=None):
+def stream_synthesis(question: str, tool_output: str, chat_history: list = None, interrupt_controller=None):
     """
     The streaming, interruptible counterpart to synthesize_node. Same two
     prompt templates (SYNTHESIS_PROMPT_WITH_CONTEXT / SYNTHESIS_PROMPT_DIRECT),
@@ -214,14 +227,20 @@ def stream_synthesis(question: str, tool_output: str, interrupt_controller=None)
     interrupt_controller: checked after every token, same cooperative-
     cancellation pattern as everywhere else in this codebase.
     """
+    messages = []
+    for msg in (chat_history or []):
+        messages.append({"role": msg["role"], "content": msg["content"]})
+
     if tool_output:
         prompt = SYNTHESIS_PROMPT_WITH_CONTEXT.format(context=tool_output, question=question)
     else:
         prompt = SYNTHESIS_PROMPT_DIRECT.format(question=question)
 
+    messages.append({"role": "user", "content": prompt})
+
     stream = groq_client.chat.completions.create(
         model=config.GROQ_LLM_MODEL,
-        messages=[{"role": "user", "content": prompt}],
+        messages=messages,
         temperature=0.7,
         max_tokens=200,
         stream=True,
@@ -264,7 +283,7 @@ class VoiceAgent:
     def __init__(self):
         self.graph = build_graph()
 
-    def run(self, question: str) -> dict:
+    def run(self, question: str, chat_history: list = None) -> dict:
         """Returns the full final state, including tool_choice and sources —
         useful for debugging/eval, not just the final_answer string."""
         result = self.graph.invoke(
@@ -274,6 +293,7 @@ class VoiceAgent:
                 "tool_output": "",
                 "sources": [],
                 "final_answer": "",
+                "chat_history": chat_history or [],
             }
         )
         return result

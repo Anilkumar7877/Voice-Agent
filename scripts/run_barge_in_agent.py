@@ -55,6 +55,7 @@ from orchestrator.audio.mic_stream import MicStream
 from orchestrator.agent.graph import route_and_retrieve, stream_synthesis
 from orchestrator.session.state_machine import SessionStateMachine, SessionState
 from orchestrator.interrupt.controller import InterruptController
+from orchestrator.session.websocket_broadcaster import broadcaster
 
 # How much silence (in consecutive VAD-silent frames) ends a turn.
 # Each frame = 512 samples @ 16kHz = 32ms. So 25 frames = 25 * 32ms = ~0.8s
@@ -64,7 +65,7 @@ from orchestrator.interrupt.controller import InterruptController
 END_OF_TURN_SILENCE_FRAMES = 25  # ~0.8s
 
 
-def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller):
+def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller, chat_history):
     """
     Runs in a background thread: STT -> route_and_retrieve (tool routing,
     quick, not interruptible mid-call) -> stream_synthesis (streaming,
@@ -76,16 +77,18 @@ def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller):
 
     user_text = stt.transcribe(input_path)
     print(f"\nYou said: {user_text}")
+    broadcaster.broadcast({"type": "user_transcript", "text": user_text})
 
     if not user_text or interrupt_controller.is_set():
         state.set(SessionState.LISTENING)
         return
 
-    result = route_and_retrieve(user_text)
+    result = route_and_retrieve(user_text, chat_history)
     print(f"[Tool used: {result['tool_choice']}]", end="")
     if result["sources"]:
         print(f"  Sources: {result['sources']}", end="")
     print()
+    broadcaster.broadcast({"type": "tool_used", "tool": result["tool_choice"], "sources": result["sources"]})
 
     # The routing+retrieval call above was blocking — check whether the
     # user started talking again WHILE it was running, before we commit to
@@ -96,11 +99,15 @@ def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller):
 
     print("Agent: ", end="", flush=True)
 
+    spoken_tokens = []
+
     def printing_token_stream():
         for token in stream_synthesis(
-            user_text, result["tool_output"], interrupt_controller=interrupt_controller
+            user_text, result["tool_output"], chat_history=chat_history, interrupt_controller=interrupt_controller
         ):
             print(token, end="", flush=True)
+            broadcaster.broadcast({"type": "agent_token", "text": token})
+            spoken_tokens.append(token)
             yield token
 
     text_chunks = chunk_stream(printing_token_stream())
@@ -108,6 +115,12 @@ def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller):
     state.set(SessionState.SPEAKING)
     completed = tts.stream_and_play(text_chunks, interrupt_controller=interrupt_controller)
     print()
+    broadcaster.broadcast({"type": "agent_done"})
+
+    spoken_answer = "".join(spoken_tokens).strip()
+    if user_text.strip() and spoken_answer:
+        chat_history.append({"role": "user", "content": user_text})
+        chat_history.append({"role": "assistant", "content": spoken_answer})
 
     if completed:
         state.set(SessionState.LISTENING)
@@ -118,6 +131,13 @@ def run_turn(user_audio: np.ndarray, stt, tts, state, interrupt_controller):
 
 def main():
     config.validate()
+
+    # Initialize chat history memory list
+    chat_history = []
+    broadcaster.on_clear_history = lambda: chat_history.clear()
+
+    # Start WebSocket broadcaster
+    broadcaster.start()
 
     stt = STTClient()
     tts = TTSClient()
@@ -196,7 +216,7 @@ def main():
                     state.set(SessionState.THINKING)
                     turn_thread = threading.Thread(
                         target=run_turn,
-                        args=(user_audio, stt, tts, state, interrupt_controller),
+                        args=(user_audio, stt, tts, state, interrupt_controller, chat_history),
                         daemon=True,
                     )
                     turn_thread.start()

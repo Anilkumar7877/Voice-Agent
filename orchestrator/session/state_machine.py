@@ -9,6 +9,7 @@ useful for debugging why an interrupt did or didn't fire correctly.
 
 from enum import Enum
 import threading
+from orchestrator.session.websocket_broadcaster import broadcaster
 
 
 class SessionState(Enum):
@@ -28,7 +29,11 @@ class SessionStateMachine:
             return self._state
 
     def set(self, new_state: SessionState):
+        changed = False
         with self._lock:
             if new_state != self._state:
                 print(f"[state] {self._state.value} -> {new_state.value}")
+                changed = True
             self._state = new_state
+        if changed:
+            broadcaster.broadcast({"type": "state", "value": new_state.value})
