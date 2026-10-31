@@ -941,7 +941,9 @@
                     }
 
                     if (data.type === "busy") {
-                        alert("Demo is in use, try again later.");
+                        statusDot.className = 'status-dot';
+                        statusText.textContent = 'Server Busy';
+                        alert("The demo server is currently at capacity with an active session. Please try again shortly.");
                         return;
                     }
 

@@ -11,25 +11,25 @@ from orchestrator.session.browser_session import BrowserSession
 
 PORT = int(os.environ.get("PORT", 8765))
 ORIGINS = [o.strip() for o in os.environ.get("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-_active = False  # one live session at a time: protects your API quota and RAM
+_sessions = set()
+MAX_CONCURRENT_SESSIONS = int(os.environ.get("MAX_CONCURRENT_SESSIONS", 5))
 
 
 async def handler(ws):
-    global _active
-    if _active:
+    if len(_sessions) >= MAX_CONCURRENT_SESSIONS:
         await ws.send(json.dumps({"type": "busy"}))
         await ws.close()
         return
 
-    _active = True
     session = BrowserSession(ws, asyncio.get_running_loop())
+    _sessions.add(session)
     session.start()
     try:
         async for msg in ws:
             session.handle_message(msg)
     finally:
         session.stop()
-        _active = False
+        _sessions.discard(session)
 
 
 async def main():
