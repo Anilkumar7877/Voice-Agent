@@ -19,9 +19,10 @@ class SessionState(Enum):
 
 
 class SessionStateMachine:
-    def __init__(self):
+    def __init__(self, on_state_change=None):
         self._state = SessionState.LISTENING
         self._lock = threading.Lock()
+        self.on_state_change = on_state_change
 
     @property
     def state(self) -> SessionState:
@@ -36,4 +37,9 @@ class SessionStateMachine:
                 changed = True
             self._state = new_state
         if changed:
+            if self.on_state_change:
+                try:
+                    self.on_state_change(new_state)
+                except Exception:
+                    pass
             broadcaster.broadcast({"type": "state", "value": new_state.value})

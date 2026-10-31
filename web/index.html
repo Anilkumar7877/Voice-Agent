@@ -607,6 +607,11 @@
                     </svg>
                     <span>Start Voice</span>
                 </button>
+                <div class="mic-indicator" id="mic-indicator" style="display:none; align-items:center; gap:3px; height:18px;">
+                    <span style="width:3px; height:6px; background:#06b6d4; border-radius:2px; transition:height 0.05s ease;"></span>
+                    <span style="width:3px; height:12px; background:#06b6d4; border-radius:2px; transition:height 0.05s ease;"></span>
+                    <span style="width:3px; height:8px; background:#06b6d4; border-radius:2px; transition:height 0.05s ease;"></span>
+                </div>
                 <div class="status-badge">
                     <span class="status-dot" id="status-dot"></span>
                     <span id="status-text">Disconnected</span>
@@ -1008,6 +1013,8 @@
                     await startVoice(socket);
                     startVoiceBtn.classList.add('active');
                     startVoiceBtn.querySelector('span').textContent = 'Voice Active';
+                    const micIndicator = document.getElementById('mic-indicator');
+                    if (micIndicator) micIndicator.style.display = 'flex';
                     startVoiceBtn.disabled = false;
                 } catch (err) {
                     console.error('[Voice] Failed to start voice:', err);

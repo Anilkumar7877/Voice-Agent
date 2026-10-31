@@ -30,16 +30,16 @@ class BrowserSession:
         self.stt = STTClient()
         self.tts = TTSClient()
         self.vad = VADProcessor(sample_rate=config.SAMPLE_RATE)
-        self.state = SessionStateMachine()
+        self.state = SessionStateMachine(
+            on_state_change=lambda new_state: self.emit({"type": "state", "value": new_state.value})
+        )
         self.interrupt = InterruptController()
         self.stopped = threading.Event()
         self.thread = threading.Thread(target=self._vad_loop, daemon=True)
 
-        # Sync state changes with the browser UI
-        self.state.on_state_change = lambda new_state: self.emit({"type": "state", "value": new_state.value})
-
     # ---- plumbing ----
     def start(self):
+        self.emit({"type": "state", "value": self.state.state.value})
         self.thread.start()
         self.loop.call_later(MAX_SESSION_SECONDS, lambda: asyncio.ensure_future(self.ws.close()))
 

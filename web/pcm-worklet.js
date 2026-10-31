@@ -21,6 +21,7 @@ class PCMCapture extends AudioWorkletProcessor {
                 this.out[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
                 if (this.n === 512) {
                     this.port.postMessage(this.out.buffer.slice(0));
+                    this.out = new Int16Array(512);
                     this.n = 0;
                 }
             }
@@ -42,6 +43,7 @@ class PCMCapture extends AudioWorkletProcessor {
 
                 if (this.n === 512) {
                     this.port.postMessage(this.out.buffer.slice(0));
+                    this.out = new Int16Array(512);
                     this.n = 0;
                 }
             }

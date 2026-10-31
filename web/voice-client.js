@@ -58,7 +58,10 @@ async function startVoice(socket) {
         latencyHint: "interactive"
     });
     await ctx.resume();
-    await ctx.audioWorklet.addModule("pcm-worklet.js");
+
+    // Use absolute URL resolution so worklet path resolves correctly on Vercel
+    const workletUrl = new URL("pcm-worklet.js", window.location.href).href;
+    await ctx.audioWorklet.addModule(workletUrl);
 
     const media = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -72,9 +75,14 @@ async function startVoice(socket) {
     const src = ctx.createMediaStreamSource(media);
     const node = new AudioWorkletNode(ctx, "pcm-capture");
 
+    let packetsSent = 0;
     node.port.onmessage = (e) => {
         if (socket && socket.readyState === WebSocket.OPEN) {
             socket.send(e.data);
+            packetsSent++;
+            if (packetsSent === 1) {
+                console.log("[Voice] First audio packet sent to server successfully");
+            }
         }
     };
 
