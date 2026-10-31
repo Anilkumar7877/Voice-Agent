@@ -53,32 +53,42 @@ class TTSClient:
         completed_normally = True
 
         try:
-            import threading
+            chunks_sent = 0
+            # Buffer chunks from the streaming LLM generator and send them to Cartesia
+            for text_chunk in text_chunks:
+                if interrupt_controller and interrupt_controller.is_set():
+                    completed_normally = False
+                    break
 
-            def send_chunks():
+                chunks_sent += 1
+                ctx.send(
+                    model_id=config.CARTESIA_TTS_MODEL,
+                    transcript=text_chunk,
+                    voice={"mode": "id", "id": config.CARTESIA_VOICE_ID},
+                    output_format={
+                        "container": "raw",
+                        "encoding": "pcm_s16le",
+                        "sample_rate": sample_rate,
+                    },
+                    continue_=True,
+                )
+
+            # Send final closure signal if chunks were sent
+            if chunks_sent > 0 and (not interrupt_controller or not interrupt_controller.is_set()):
                 try:
-                    chunks = list(text_chunks)
-                    for i, text_chunk in enumerate(chunks):
-                        if interrupt_controller and interrupt_controller.is_set():
-                            break
-
-                        is_last = i == len(chunks) - 1
-                        ctx.send(
-                            model_id=config.CARTESIA_TTS_MODEL,
-                            transcript=text_chunk,
-                            voice={"mode": "id", "id": config.CARTESIA_VOICE_ID},
-                            output_format={
-                                "container": "raw",
-                                "encoding": "pcm_s16le",
-                                "sample_rate": sample_rate,
-                            },
-                            continue_=not is_last,
-                        )
+                    ctx.send(
+                        model_id=config.CARTESIA_TTS_MODEL,
+                        transcript="",
+                        voice={"mode": "id", "id": config.CARTESIA_VOICE_ID},
+                        output_format={
+                            "container": "raw",
+                            "encoding": "pcm_s16le",
+                            "sample_rate": sample_rate,
+                        },
+                        continue_=False,
+                    )
                 except Exception:
                     pass
-
-            sender_thread = threading.Thread(target=send_chunks, daemon=True)
-            sender_thread.start()
 
             for event in ctx.receive():
                 if interrupt_controller and interrupt_controller.is_set():
