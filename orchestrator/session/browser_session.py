@@ -16,7 +16,7 @@ from orchestrator.agent.graph import route_and_retrieve, stream_synthesis
 from orchestrator.session.state_machine import SessionStateMachine, SessionState
 from orchestrator.interrupt.controller import InterruptController
 
-END_OF_TURN_SILENCE_FRAMES = 25
+END_OF_TURN_SILENCE_FRAMES = 20  # ~0.64s of silence ends the user's turn
 MAX_SESSION_SECONDS = 300
 
 
@@ -29,7 +29,8 @@ class BrowserSession:
         self.chat_history = []
         self.stt = STTClient()
         self.tts = TTSClient()
-        self.vad = VADProcessor(sample_rate=config.SAMPLE_RATE)
+        # threshold=0.35 makes VAD more responsive to laptop / mobile browser microphones
+        self.vad = VADProcessor(sample_rate=config.SAMPLE_RATE, threshold=0.35)
         self.state = SessionStateMachine(
             on_state_change=lambda new_state: self.emit({"type": "state", "value": new_state.value})
         )
@@ -70,6 +71,7 @@ class BrowserSession:
     # ---- same logic as main() in run_barge_in_agent.py ----
     def _vad_loop(self):
         speech_buffer = []
+        pre_buffer = []  # rolling buffer of last 5 frames (~160ms) to preserve onset
         silence = 0
         accumulating = False
         in_speech = False
@@ -80,6 +82,12 @@ class BrowserSession:
             except queue.Empty:
                 continue
 
+            # Keep a rolling buffer of 5 frames before speech begins
+            if not accumulating:
+                pre_buffer.append(frame)
+                if len(pre_buffer) > 5:
+                    pre_buffer.pop(0)
+
             ev = self.vad.process_frame(frame)
             if ev and "start" in ev:
                 self.emit({"type": "stop_audio"})  # flush audio queued in the browser
@@ -88,7 +96,7 @@ class BrowserSession:
                 if ev and "start" in ev:
                     self.interrupt.trigger()
                     self.state.set(SessionState.LISTENING)
-                    speech_buffer = [frame]
+                    speech_buffer = list(pre_buffer) + [frame]
                     accumulating = True
                     in_speech = True
                     silence = 0
@@ -101,7 +109,7 @@ class BrowserSession:
 
             if ev and "start" in ev:
                 if not accumulating:
-                    speech_buffer = [frame]
+                    speech_buffer = list(pre_buffer) + [frame]
                 else:
                     speech_buffer.append(frame)
                 accumulating = True
@@ -120,6 +128,7 @@ class BrowserSession:
                 if not in_speech and silence >= END_OF_TURN_SILENCE_FRAMES:
                     audio = np.concatenate(speech_buffer, axis=0)
                     speech_buffer = []
+                    pre_buffer = []
                     accumulating = False
                     in_speech = False
                     silence = 0

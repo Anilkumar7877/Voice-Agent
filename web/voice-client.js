@@ -75,6 +75,33 @@ async function startVoice(socket) {
     const src = ctx.createMediaStreamSource(media);
     const node = new AudioWorkletNode(ctx, "pcm-capture");
 
+    // Connect analyzer to visually bounce mic indicator bars with real speech volume
+    const analyser = ctx.createAnalyser();
+    analyser.fftSize = 64;
+    src.connect(analyser);
+
+    const micIndicator = document.getElementById('mic-indicator');
+    const bars = micIndicator ? micIndicator.querySelectorAll('span') : [];
+    const dataArray = new Uint8Array(analyser.frequencyBinCount);
+
+    function updateVolumeVisualizer() {
+        if (!window.voiceActive) return;
+        analyser.getByteFrequencyData(dataArray);
+        let sum = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i];
+        }
+        const avg = sum / dataArray.length;
+        if (bars.length >= 3) {
+            bars[0].style.height = `${Math.max(4, Math.min(18, (avg / 255) * 26 + 4))}px`;
+            bars[1].style.height = `${Math.max(4, Math.min(18, (avg / 255) * 32 + 6))}px`;
+            bars[2].style.height = `${Math.max(4, Math.min(18, (avg / 255) * 22 + 4))}px`;
+        }
+        requestAnimationFrame(updateVolumeVisualizer);
+    }
+    window.voiceActive = true;
+    requestAnimationFrame(updateVolumeVisualizer);
+
     let packetsSent = 0;
     node.port.onmessage = (e) => {
         if (socket && socket.readyState === WebSocket.OPEN) {
