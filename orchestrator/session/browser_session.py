@@ -103,8 +103,7 @@ class BrowserSession:
                 continue
 
             if self.state.state == SessionState.THINKING:
-                if ev and "start" in ev:
-                    self.interrupt.trigger()
+                # Do not immediately self-interrupt while thinking on trailing room noise
                 continue
 
             if ev and "start" in ev:
@@ -133,6 +132,11 @@ class BrowserSession:
                     in_speech = False
                     silence = 0
                     self.vad.reset()
+
+                    # Require at least 0.3s (4800 samples) of speech to ignore brief room clicks/pops
+                    if len(audio) < 4800:
+                        continue
+
                     self.interrupt.clear()
                     self.state.set(SessionState.THINKING)
                     threading.Thread(target=self._run_turn, args=(audio,), daemon=True).start()
