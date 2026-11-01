@@ -853,6 +853,39 @@
             }
         }
 
+        function appendSystemNotice(text, type = 'info') {
+            const msgDiv = document.createElement('div');
+            msgDiv.className = `msg system ${type}`;
+            msgDiv.style.alignSelf = 'center';
+            msgDiv.style.maxWidth = '90%';
+            msgDiv.style.margin = '8px 0';
+
+            const bubble = document.createElement('div');
+            bubble.className = 'msg-bubble';
+            bubble.style.fontSize = '13px';
+            bubble.style.padding = '8px 14px';
+            bubble.style.borderRadius = '8px';
+            bubble.style.display = 'flex';
+            bubble.style.alignItems = 'center';
+            bubble.style.gap = '8px';
+
+            if (type === 'error') {
+                bubble.style.background = 'rgba(239, 68, 68, 0.15)';
+                bubble.style.border = '1px solid rgba(239, 68, 68, 0.4)';
+                bubble.style.color = '#fca5a5';
+                bubble.innerHTML = `<span>⚠️</span><span>${text}</span>`;
+            } else {
+                bubble.style.background = 'rgba(6, 182, 212, 0.12)';
+                bubble.style.border = '1px solid rgba(6, 182, 212, 0.3)';
+                bubble.style.color = '#a5f3fc';
+                bubble.innerHTML = `<span>ℹ️</span><span>${text}</span>`;
+            }
+
+            msgDiv.appendChild(bubble);
+            transcriptList.appendChild(msgDiv);
+            scrollToBottom();
+        }
+
         function scrollToBottom() {
             transcriptList.scrollTop = transcriptList.scrollHeight;
         }
@@ -978,6 +1011,14 @@
                             
                         case 'agent_done':
                             finalizeAgentStreaming();
+                            break;
+
+                        case 'error':
+                            appendSystemNotice(data.message, 'error');
+                            break;
+
+                        case 'info':
+                            appendSystemNotice(data.message, 'info');
                             break;
                             
                         default:

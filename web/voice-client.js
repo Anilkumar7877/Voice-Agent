@@ -52,16 +52,18 @@ class VoicePlayer {
 }
 
 async function startVoice(socket) {
-    // Specify 16000Hz directly so the browser native audio hardware/pipeline resamples cleanly
-    const ctx = new (window.AudioContext || window.webkitAudioContext)({
-        sampleRate: 16000,
-        latencyHint: "interactive"
-    });
-    await ctx.resume();
+    // 1. Playback Context: native 44.1kHz context matching Cartesia audio output
+    const playCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await playCtx.resume();
+    window.voicePlayer = new VoicePlayer(playCtx);
+
+    // 2. Capture Context: dedicated context for microphone capture
+    const captureCtx = new (window.AudioContext || window.webkitAudioContext)();
+    await captureCtx.resume();
 
     // Use absolute URL resolution so worklet path resolves correctly on Vercel
     const workletUrl = new URL("pcm-worklet.js", window.location.href).href;
-    await ctx.audioWorklet.addModule(workletUrl);
+    await captureCtx.audioWorklet.addModule(workletUrl);
 
     const media = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -72,11 +74,11 @@ async function startVoice(socket) {
         },
     });
 
-    const src = ctx.createMediaStreamSource(media);
-    const node = new AudioWorkletNode(ctx, "pcm-capture");
+    const src = captureCtx.createMediaStreamSource(media);
+    const node = new AudioWorkletNode(captureCtx, "pcm-capture");
 
     // Connect analyzer to visually bounce mic indicator bars with real speech volume
-    const analyser = ctx.createAnalyser();
+    const analyser = captureCtx.createAnalyser();
     analyser.fftSize = 64;
     src.connect(analyser);
 
@@ -113,12 +115,11 @@ async function startVoice(socket) {
         }
     };
 
-    const mute = ctx.createGain();
+    const mute = captureCtx.createGain();
     mute.gain.value = 0;
     src.connect(node);
     node.connect(mute);
-    mute.connect(ctx.destination);
+    mute.connect(captureCtx.destination);
 
-    window.voicePlayer = new VoicePlayer(ctx);
     return true;
 }

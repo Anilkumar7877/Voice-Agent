@@ -160,6 +160,7 @@ class BrowserSession:
 
             if not user_text or not user_text.strip():
                 print("[Turn] No speech recognized, returning to LISTENING")
+                self.emit({"type": "info", "message": "No clear speech detected. Please speak clearly into your mic."})
                 self.state.set(SessionState.LISTENING)
                 return
 
@@ -190,6 +191,13 @@ class BrowserSession:
                     spoken.append(t)
                     yield t
 
+            # Drain any stale queued frames before entering SPEAKING to prevent instant false self-interrupt
+            while not self.frames.empty():
+                try:
+                    self.frames.get_nowait()
+                except queue.Empty:
+                    break
+
             # Change state to SPEAKING once tokens start streaming into TTS
             self.state.set(SessionState.SPEAKING)
             completed = self.tts.stream_and_play(
@@ -210,5 +218,6 @@ class BrowserSession:
             print(f"[Turn Error] {e}", flush=True)
             import traceback
             traceback.print_exc()
+            self.emit({"type": "error", "message": f"Server Error: {str(e)}"})
         finally:
             self.state.set(SessionState.LISTENING)
